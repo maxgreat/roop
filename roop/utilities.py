@@ -37,7 +37,8 @@ def detect_fps(target_path: str) -> float:
     try:
         numerator, denominator = map(int, output)
         return numerator / denominator
-    except Exception:
+    except Exception as e:
+        print("Exception when determining FPS:", e)
         pass
     return 30
 
@@ -74,6 +75,11 @@ def get_temp_frame_paths(target_path: str) -> List[str]:
 
 
 def get_temp_directory_path(target_path: str) -> str:
+    d = "temp/" + os.path.basename(target_path).split(" ")[0]
+    if os.path.exists:
+        return d
+    os.mkdir(d)
+    return d
     target_name, _ = os.path.splitext(os.path.basename(target_path))
     target_directory_path = os.path.dirname(target_path)
     return os.path.join(target_directory_path, TEMP_DIRECTORY, target_name)
@@ -116,7 +122,10 @@ def clean_temp(target_path: str) -> None:
 
 
 def has_image_extension(image_path: str) -> bool:
-    return image_path.lower().endswith(('png', 'jpg', 'jpeg', 'webp'))
+    return image_path.lower().endswith(('png', 'jpg', 'jpeg'))
+
+def has_gif_extension(image_path: str) -> bool:
+    return image_path.lower().endswith(('gif'))
 
 
 def is_image(image_path: str) -> bool:

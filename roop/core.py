@@ -20,7 +20,7 @@ import roop.metadata
 import roop.ui as ui
 from roop.predictor import predict_image, predict_video
 from roop.processors.frame.core import get_frame_processors_modules
-from roop.utilities import has_image_extension, is_image, is_video, detect_fps, create_video, extract_frames, get_temp_frame_paths, restore_audio, create_temp, move_temp, clean_temp, normalize_output_path
+from roop.utilities import has_image_extension, is_image, is_video, detect_fps, create_video, extract_frames, get_temp_frame_paths, restore_audio, create_temp, move_temp, clean_temp, normalize_output_path, has_gif_extension
 
 warnings.filterwarnings('ignore', category=FutureWarning, module='insightface')
 warnings.filterwarnings('ignore', category=UserWarning, module='torchvision')
@@ -48,13 +48,14 @@ def parse_args() -> None:
     program.add_argument('--execution-provider', help='available execution provider (choices: cpu, ...)', dest='execution_provider', default=['cpu'], choices=suggest_execution_providers(), nargs='+')
     program.add_argument('--execution-threads', help='number of execution threads', dest='execution_threads', type=int, default=suggest_execution_threads())
     program.add_argument('-v', '--version', action='version', version=f'{roop.metadata.name} {roop.metadata.version}')
+    program.add_argument("--multiple", dest='multiple', action='store_true')
 
     args = program.parse_args()
 
     roop.globals.source_path = args.source_path
     roop.globals.target_path = args.target_path
-    roop.globals.output_path = normalize_output_path(roop.globals.source_path, roop.globals.target_path, args.output_path)
-    roop.globals.headless = roop.globals.source_path is not None and roop.globals.target_path is not None and roop.globals.output_path is not None
+    roop.globals.output_path = args.output_path
+    roop.globals.headless = (roop.globals.source_path is not None) or args.multiple
     roop.globals.frame_processors = args.frame_processor
     roop.globals.keep_fps = args.keep_fps
     roop.globals.keep_frames = args.keep_frames
@@ -70,6 +71,7 @@ def parse_args() -> None:
     roop.globals.max_memory = args.max_memory
     roop.globals.execution_providers = decode_execution_providers(args.execution_provider)
     roop.globals.execution_threads = args.execution_threads
+    roop.globals.multiple = args.multiple
 
 
 def encode_execution_providers(execution_providers: List[str]) -> List[str]:
@@ -129,13 +131,15 @@ def update_status(message: str, scope: str = 'ROOP.CORE') -> None:
 
 
 def start() -> None:
+    print("Starting processing...")
+    """
     for frame_processor in get_frame_processors_modules(roop.globals.frame_processors):
         if not frame_processor.pre_start():
             return
+    """
     # process image to image
     if has_image_extension(roop.globals.target_path):
-        if predict_image(roop.globals.target_path):
-            destroy()
+        print("Processing one Image : ", roop.globals.target_path)
         shutil.copy2(roop.globals.target_path, roop.globals.output_path)
         # process frame
         for frame_processor in get_frame_processors_modules(roop.globals.frame_processors):
@@ -143,15 +147,46 @@ def start() -> None:
             frame_processor.process_image(roop.globals.source_path, roop.globals.output_path, roop.globals.output_path)
             frame_processor.post_process()
         # validate image
-        if is_image(roop.globals.target_path):
+        if is_image(roop.globals.output_path):
+            print('Processing to image succeed!')
             update_status('Processing to image succeed!')
         else:
+            print('Processing to image failed!')
             update_status('Processing to image failed!')
         return
-    # process image to videos
-    if predict_video(roop.globals.target_path):
-        destroy()
+
+    if has_gif_extension(roop.globals.target_path):
+        print("This is a GIF")
+        from PIL import Image
+        list_image = []
+        output_name = roop.globals.output_path
+        if not os.path.exists("temp/"):
+            os.mkdir("temp")
+        duration = []
+        with Image.open(roop.globals.target_path) as im:
+            for i in range(im.n_frames):
+                im.seek(i)
+                duration.append(im.info['duration'])
+                new_file_name = f'temp/{os.path.basename(roop.globals.target_path).split(".")[0]}_{i}.png'
+                list_image.append(new_file_name)
+                im.save(new_file_name)
+                roop.globals.output_path = new_file_name        
+        for frame_processor in get_frame_processors_modules(roop.globals.frame_processors):
+            frame_processor.process_video(roop.globals.source_path, list_image)
+            frame_processor.post_process()
+        image_output = Image.open(list_image[0])
+        image_output.putalpha(255)
+        image_output.convert("RGBA")
+        image_output.save(output_name, save_all=True, append_images=[Image.open(i) for i in list_image[1:]], duration=duration, loop=0)
+        [os.remove(i) for i in list_image]
+        return
+        
+
+
     update_status('Creating temporary resources...')
+    if(not is_video(roop.globals.target_path)):
+        print("Cannot handle the file, it's not a video")
+        return
     create_temp(roop.globals.target_path)
     # extract frames
     if roop.globals.keep_fps:
@@ -214,7 +249,36 @@ def run() -> None:
             return
     limit_resources()
     if roop.globals.headless:
-        start()
+        if os.path.isdir(roop.globals.target_path):
+            dir_path = roop.globals.target_path
+            # Get list of all files only in the given directory
+            fun = lambda x : os.path.isfile(os.path.join(dir_path,x))
+            files_list = filter(fun, os.listdir(dir_path))
+ 
+            # Create a list of files in directory along with the size
+            size_of_file = [
+                (f,os.stat(os.path.join(dir_path, f)).st_size)
+                for f in files_list
+            ]
+            fun = lambda x : x[1]
+            output_directory = roop.globals.output_path
+            if not os.path.exists(roop.globals.output_path):
+                os.mkdir(roop.globals.output_path)
+            for f,_ in sorted(size_of_file,key = fun):
+                roop.globals.target_path = os.path.join(dir_path, f)
+                roop.globals.output_path = os.path.join(output_directory, f.replace(" ", ""))
+                print("Output path = ", roop.globals.output_path)
+                if(not os.path.exists(roop.globals.output_path)):
+                    print("handling file : ", roop.globals.target_path)
+                    try:
+                        start()
+                    except Exception as e :
+                        print(f"Couldn't handle :{f}, exception : ", e)
+                        exit()
+                else:
+                    print("Skipping :", roop.globals.target_path)
+        else:
+            start()
     else:
         window = ui.init(start, destroy)
         window.mainloop()
